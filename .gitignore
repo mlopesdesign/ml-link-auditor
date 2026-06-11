@@ -1,0 +1,22 @@
+# Builds e pacotes
+*.zip
+build/
+dist/
+
+# Sistema
+.DS_Store
+Thumbs.db
+__MACOSX/
+
+# Editores
+.idea/
+.vscode/
+*.swp
+
+# Dependências (não usadas em runtime)
+node_modules/
+vendor/
+
+# Ambiente local
+.env
+*.log
