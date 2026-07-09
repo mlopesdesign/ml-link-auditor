@@ -1,0 +1,24 @@
+# Built artifacts
+*.zip
+dist/
+backups/
+
+# Temporary scratch (kept for historical reasons)
+_baseline_*
+_work_*
+_zip_*
+_inspect*
+_*_diff/
+_*_backup/
+_v0*_backup/
+_v0*_diff/
+extracted/
+final_staging/
+inspect_original/
+scratch/
+zip_audit/
+
+# OS junk
+.DS_Store
+Thumbs.db
+Desktop.ini

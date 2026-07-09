@@ -1,0 +1,115 @@
+name: Build and release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag para empacotar (ex.: v1.3.3). Vazio = usa o HEAD atual.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build ZIP and publish GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '7.4'
+          coverage: none
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Determinar versao alvo
+        id: version
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            target="${{ inputs.tag }}"
+          else
+            target="${GITHUB_REF_NAME}"
+          fi
+          bare="${target#v}"
+          echo "target=$target" >> $GITHUB_OUTPUT
+          echo "bare=$bare" >> $GITHUB_OUTPUT
+          echo "Alvo: $target (bare: $bare)"
+
+      - name: Validar sincronizacao de versao
+        run: bash scripts/sync-version.sh
+
+      - name: Validar que tag == versao do header
+        run: |
+          bare="${{ steps.version.outputs.bare }}"
+          header=$(grep -E '^\s*\*\s*Version:' ml-link-auditor/ml-link-auditor.php | head -1 | sed -E 's/.*Version:\s*([0-9.]+).*/\1/')
+          if [ "$header" != "$bare" ]; then
+            echo "Tag $bare difere do Version: $header"
+            exit 1
+          fi
+          echo "OK: tag $bare == header $header"
+
+      - name: Sintaxe PHP
+        run: |
+          find ml-link-auditor -name "*.php" -print0 | xargs -0 -n1 php -l
+
+      - name: Sintaxe JS
+        run: |
+          for f in $(find ml-link-auditor -name "*.js"); do
+            node --check "$f"
+          done
+
+      - name: Empacotar ZIP
+        run: bash scripts/package.sh "${{ steps.version.outputs.bare }}"
+
+      - name: Capturar SHA-256 e tamanho
+        id: hash
+        working-directory: dist
+        run: |
+          f=$(ls *.zip)
+          echo "name=$f"        >> $GITHUB_OUTPUT
+          echo "size=$(stat -c%s "$f")" >> $GITHUB_OUTPUT
+          echo "sha256=$(sha256sum "$f" | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+
+      - name: Criar GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ML Link Auditor ${{ steps.version.outputs.target }}
+          body: |
+            ## ML Link Auditor ${{ steps.version.outputs.target }}
+
+            Release publicada via GitHub Actions.
+
+            ### Arquivo
+            ZIP: `${{ steps.hash.outputs.name }}`
+
+            ### SHA-256
+            `${{ steps.hash.outputs.sha256 }}`
+
+            ### Tamanho
+            ${{ steps.hash.outputs.size }} bytes
+
+            ### Atualizacao automatica
+            O plugin detecta esta release via License Hub (`license.mlopesdesign.com.br`)
+            e aparece em `WP Admin > Plugins > Atualizacoes`.
+          files: dist/*.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
