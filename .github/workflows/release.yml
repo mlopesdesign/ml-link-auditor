@@ -105,8 +105,8 @@ jobs:
             ${{ steps.hash.outputs.size }} bytes
 
             ### Atualizacao automatica
-            O plugin detecta esta release via License Hub (`license.mlopesdesign.com.br`)
-            e aparece em `WP Admin > Plugins > Atualizacoes`.
+            A partir da 1.3.3 o plugin atualiza pelo repositorio publico
+            `mlopesdesign/ml-link-auditor-releases`; publique a mesma versao la.
           files: dist/*.zip
           draft: false
           prerelease: false

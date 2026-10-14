@@ -10,6 +10,12 @@ with this file.
 
 ---
 
+## [1.3.3] — 2026-10-14
+
+- Atualizacao automatica pelo repositorio publico `ml-link-auditor-releases` (a rota de update do Hub nunca existiu).
+- Atualizador: asset exato, no_update, icones, cache 6 h / 15 min.
+- Uninstall preserva a quarentena.
+
 ## [1.3.2] - 2026-06-30
 
 ### Added
