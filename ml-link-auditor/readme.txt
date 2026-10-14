@@ -4,7 +4,7 @@ Tags: broken links, audit, ajax, quarantine, links, joomla migration
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.2
+Stable tag: 1.3.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -44,6 +44,12 @@ O ML Link Auditor varre o conteúdo publicado do site procurando links internos 
 3. Acesse o menu "ML Link Auditor" no admin e inicie a varredura.
 
 == Changelog ==
+
+= 1.3.3 =
+* Atualizacao automatica passa a vir do repositorio publico mlopesdesign/ml-link-auditor-releases (GitHub Releases). A rota de atualizacao do Hub de licencas usada ate a 1.3.2 nao existia, entao as atualizacoes automaticas nao chegavam.
+* Atualizador: so o ZIP exato ml-link-auditor-vX.Y.Z.zip; "sem atualizacao" informado corretamente; icones; cache de 6 h (15 min em falha).
+* Recursos Pro continuam controlados pela licenca.
+* Desinstalar preserva a tabela de quarentena (copias de conteudo) e remove tabelas de resultados, opcoes, caches e agendamentos do plugin.
 
 = 1.3.2 =
 * **URL de info separada do Hub**: novo campo info_url permite apontar checagem de versão para qualquer URL (ex: GitHub Releases) sem mexer no Hub.
@@ -96,3 +102,8 @@ O ML Link Auditor varre o conteúdo publicado do site procurando links internos 
 
 = 1.0.0 =
 * Versão inicial.
+
+== Upgrade Notice ==
+
+= 1.3.3 =
+Quem esta na 1.3.2 precisa instalar a 1.3.3 manualmente uma vez (enviar o ZIP em Plugins > Adicionar novo). Dai em diante as atualizacoes chegam pelo painel.

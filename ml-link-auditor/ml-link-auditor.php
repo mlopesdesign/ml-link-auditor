@@ -3,7 +3,7 @@
  * Plugin Name: ML Link Auditor
  * Plugin URI: https://mlopesdesign.com.br
  * Description: Audita links internos e externos em posts e páginas, executa varredura AJAX em lote, sugere correções, salva cópias em quarentena, pode mover conteúdos para rascunho e integra com o hub de licenças MLopes Design para recursos Pro.
- * Version: 1.3.2
+ * Version: 1.3.3
  * Author: Marcio Lopes
  * Author URI: https://mlopesdesign.com.br
  * License: GPL2+
@@ -11,6 +11,7 @@
  * Tested up to: 6.9
  * Requires PHP: 7.4
  * Text Domain: ml-link-auditor
+ * Update URI: https://github.com/mlopesdesign/ml-link-auditor-releases
  */
 
 if (!defined('ABSPATH')) {
@@ -30,7 +31,7 @@ if (!defined('ABSPATH')) {
  *  ============================================================ */
 
 if (!defined('MLLA_VERSION')) {
-    define('MLLA_VERSION', '1.3.2');
+    define('MLLA_VERSION', '1.3.3');
 }
 
 if (!class_exists('MLLA_LicenseManager', false)) {
@@ -99,7 +100,7 @@ final class MLLA_LicenseManager {
             'email' => '',
             'product_id' => self::DEFAULT_PRODUCT_ID,
             'hub_url' => self::DEFAULT_HUB_URL,
-            'info_url' => '', // se vazio, deriva de hub_url (/updates/<product>.json)
+            'info_url' => '', // obsoleto desde 1.3.3 (atualizacao via GitHub Releases); mantido por compatibilidade
             'status' => 'inactive',
             'plan' => 'free',
             'premium' => false,
@@ -315,7 +316,7 @@ final class MLLA_LicenseManager {
             'domain' => wp_parse_url(home_url(), PHP_URL_HOST) ?: '',
             'site_url' => site_url(),
             'home_url' => home_url(),
-            'version' => defined('MLLA_VERSION') ? MLLA_VERSION : '1.3.2',
+            'version' => MLLA_VERSION,
             'admin_email' => $email,
             'site_fingerprint' => $this->site_fingerprint(),
         ];
@@ -403,66 +404,49 @@ final class MLLA_LicenseManager {
 } // end if (!class_exists('MLLA_LicenseManager'))
 
 /* ============================================================
- *  MLLA_Updater — auto-update via WP update mechanism
+ *  MLLA_Updater — atualizacao via GitHub Releases (repositorio publico de ZIPs)
  *  ============================================================
  *
- *  - Lê o info endpoint público do Hub (info.json, sem auth)
- *  - Injeta update no pre_set_site_transient_update_plugins
- *  - Fornece changelog e detalhes via plugins_api
- *  - Gera token assinado para download (Hub valida antes de servir ZIP)
- *  - Cache local em transient de 12h; cron força checagem diária
+ *  - Fonte: https://api.github.com/repos/mlopesdesign/ml-link-auditor-releases/releases/latest
+ *  - Usa somente o asset exato ml-link-auditor-vX.Y.Z.zip (sem zipball, sem "qualquer ZIP")
+ *  - response quando ha versao nova; no_update caso contrario (controle de auto-update do WP)
+ *  - Cache: 6 h com sucesso, 15 min em falha (falha nao apaga um resultado bom)
+ *  - Recursos Pro continuam controlados pela licenca (MLLA_LicenseManager); a atualizacao
+ *    do plugin e livre. Integracao com o ML License Hub fica para quando ele estiver no ar.
  *
- *  Contrato esperado (lado Hub):
- *    GET https://license.mlopesdesign.com.br/updates/<product>.json
- *    → { version, download_path, tested, requires, requires_php, homepage, changelog, sections }
- *    download_path = "updates/<product>-<version>.zip?token=<signed>"
- *
- *  @since 1.3.2
+ *  @since 1.3.3 (antes: Hub de licencas, rota updates/<produto>.json que nunca existiu no Hub)
  *  ============================================================ */
 
 final class MLLA_Updater {
-    private const TRANSIENT = 'mlla_update_check';
-    private const CACHE_TTL = 12 * HOUR_IN_SECONDS;
+    private const TRANSIENT  = 'mlla_update_check';
+    private const CACHE_TTL  = 6 * HOUR_IN_SECONDS;
+    private const FAIL_TTL   = 15 * MINUTE_IN_SECONDS;
+    private const GITHUB_USER = 'mlopesdesign';
+    private const GITHUB_REPO = 'ml-link-auditor-releases';
 
     /** @var string */
     private $plugin_file;
     /** @var string */
+    private $plugin_basename;
+    /** @var string */
     private $plugin_slug;
-    /** @var string */
-    private $hub_url;
-    /** @var string */
-    private $info_url;
-    /** @var string */
-    private $product_id;
     /** @var string */
     private $current_version;
 
     public function __construct(string $plugin_file, string $product_id = 'ml-link-auditor') {
-        $this->plugin_file = $plugin_file;
-        $this->plugin_slug = dirname(plugin_basename($plugin_file));
-        $this->product_id = $product_id;
-        $license = new MLLA_LicenseManager();
-        // hub_base continua usado para construir URL de download (que precisa estar no mesmo host do Hub pra ter o token validado).
-        $hub_base = rtrim(preg_replace('~/api/[^/]*$~', '', $license->get_hub_url()), '/');
-        $this->hub_url = $hub_base;
-        $this->info_url = $license->get_info_url();
-        if (function_exists('get_plugin_data')) {
-            $data = get_plugin_data($plugin_file, false, false);
-            $this->current_version = (string) ($data['Version'] ?? '0.0.0');
-        } else {
-            $this->current_version = defined('MLLA_VERSION') ? MLLA_VERSION : '1.3.2';
-        }
+        $this->plugin_file     = $plugin_file;
+        $this->plugin_basename = plugin_basename($plugin_file);
+        $this->plugin_slug     = dirname($this->plugin_basename);
+        $this->current_version = defined('MLLA_VERSION') ? MLLA_VERSION : '0.0.0';
 
         add_filter('pre_set_site_transient_update_plugins', [$this, 'maybe_push_update']);
         add_filter('plugins_api', [$this, 'provide_plugin_info'], 10, 3);
-        add_filter('upgrader_pre_download', [$this, 'before_download'], 10, 3);
-        add_action('mlla_check_for_update', [$this, 'force_check']);
-        // Agenda a checagem no hook 'init' (mais seguro que no construtor).
+        add_action('mlla_check_for_update', [$this, 'refresh_cache']);
         add_action('init', [$this, 'register_update_schedule']);
     }
 
     /**
-     * Registra cron de checagem de updates. Chamado via hook 'init'.
+     * Cron leve (2x ao dia): renova o cache desta consulta; o WP faz o resto no seu ciclo.
      */
     public function register_update_schedule(): void {
         if (!wp_next_scheduled('mlla_check_for_update')) {
@@ -470,192 +454,170 @@ final class MLLA_Updater {
         }
     }
 
-    /**
-     * Injeta informação de update no transient oficial do WP.
-     * Só aparece se a licença for premium OU se o hub retornar info mesmo assim
-     * (configurável no Hub via flag `show_updates_for_free`).
-     */
+    public function refresh_cache(): void {
+        $this->get_release(true);
+    }
+
     public function maybe_push_update($transient) {
-        if (!is_object($transient)) {
-            $transient = new stdClass();
-        }
-        $info = $this->get_remote_info();
-        if (!$info || empty($info->version)) {
+        if (!is_object($transient) || empty($transient->checked)) {
             return $transient;
         }
-        if (version_compare($this->current_version, $info->version, '>=')) {
-            // Já estamos na última
-            return $transient;
-        }
-        // Verifica licença — updates só aparecem pra quem tem licença ativa/trial.
-        $license = new MLLA_LicenseManager();
-        if (!$license->is_premium() && empty($info->allow_free_update)) {
-            // Se for Free e Hub não permite update grátis, exibe como "info" mas sem package
-            $update = (object) [
-                'slug' => $this->plugin_slug,
-                'plugin' => $this->plugin_file,
-                'new_version' => $info->version,
-                'url' => $info->homepage ?? '',
-                'package' => false, // sem package = WP mostra "automático só pra Pro"
-                'icons' => [],
-                'tested' => $info->tested ?? '',
-                'requires' => $info->requires ?? '',
-                'requires_php' => $info->requires_php ?? '',
-                'compatibility' => new stdClass(),
-                'upgrade_notice' => $info->upgrade_notice ?? '',
-            ];
-            $transient->response[$this->plugin_file] = $update;
-            return $transient;
-        }
-        // Licença OK — pode atualizar
-        $update = (object) [
-            'slug' => $this->plugin_slug,
-            'plugin' => $this->plugin_file,
-            'new_version' => $info->version,
-            'url' => $info->homepage ?? '',
-            'package' => $this->build_download_url($info),
-            'icons' => [],
-            'tested' => $info->tested ?? '',
-            'requires' => $info->requires ?? '',
-            'requires_php' => $info->requires_php ?? '',
+        $release = $this->get_release();
+        $remote  = $release ? $this->release_version($release) : '';
+        $package = $release ? $this->package_url($release) : '';
+
+        $item = (object) [
+            'id'            => 'github.com/' . self::GITHUB_USER . '/' . self::GITHUB_REPO,
+            'slug'          => $this->plugin_slug,
+            'plugin'        => $this->plugin_basename,
+            'new_version'   => $remote,
+            'url'           => 'https://github.com/' . self::GITHUB_USER . '/' . self::GITHUB_REPO,
+            'package'       => $package,
+            'icons'         => $this->icons(),
+            'banners'       => [],
+            'banners_rtl'   => [],
+            'tested'        => '6.9',
+            'requires'      => '6.0',
+            'requires_php'  => '7.4',
             'compatibility' => new stdClass(),
-            'upgrade_notice' => $info->upgrade_notice ?? '',
         ];
-        $transient->response[$this->plugin_file] = $update;
+
+        if ($remote !== '' && $package !== '' && version_compare($this->current_version, $remote, '<')) {
+            if (!isset($transient->response) || !is_array($transient->response)) {
+                $transient->response = [];
+            }
+            $transient->response[$this->plugin_basename] = $item;
+            if (isset($transient->no_update) && is_array($transient->no_update)) {
+                unset($transient->no_update[$this->plugin_basename]);
+            }
+        } else {
+            $item->new_version = $this->current_version;
+            $item->package     = '';
+            if (!isset($transient->no_update) || !is_array($transient->no_update)) {
+                $transient->no_update = [];
+            }
+            $transient->no_update[$this->plugin_basename] = $item;
+            if (isset($transient->response) && is_array($transient->response)) {
+                unset($transient->response[$this->plugin_basename]);
+            }
+        }
         return $transient;
     }
 
-    /**
-     * Fornece detalhes do plugin quando o usuário clica em "Ver detalhes".
-     */
     public function provide_plugin_info($result, $action, $args) {
-        if ($action !== 'plugin_information') {
+        if ($action !== 'plugin_information' || !isset($args->slug) || $args->slug !== $this->plugin_slug) {
             return $result;
         }
-        if (!isset($args->slug) || $args->slug !== $this->plugin_slug) {
-            return $result;
-        }
-        $info = $this->get_remote_info();
-        if (!$info) {
+        $release = $this->get_release();
+        if (!$release || $this->package_url($release) === '') {
             return $result;
         }
         return (object) [
-            'name' => $info->name ?? 'ML Link Auditor',
-            'slug' => $this->plugin_slug,
-            'plugin' => $this->plugin_file,
-            'version' => $info->version ?? '',
-            'author' => 'Marcio Lopes',
-            'homepage' => $info->homepage ?? '',
-            'sections' => [
-                'description' => $info->sections->description ?? '',
-                'changelog' => $info->sections->changelog ?? $info->changelog ?? '',
+            'name'          => 'ML Link Auditor',
+            'slug'          => $this->plugin_slug,
+            'version'       => $this->release_version($release),
+            'author'        => '<a href="https://mlopesdesign.com.br">Marcio Lopes</a>',
+            'homepage'      => 'https://mlopesdesign.com.br',
+            'requires'      => '6.0',
+            'tested'        => '6.9',
+            'requires_php'  => '7.4',
+            'last_updated'  => (string) ($release['published_at'] ?? ''),
+            'download_link' => $this->package_url($release),
+            'icons'         => $this->icons(),
+            'banners'       => [],
+            'sections'      => [
+                'description' => 'Audita links internos e externos em posts e páginas, com varredura em lote, sugestões de correção e quarentena.',
+                'changelog'   => nl2br(esc_html((string) ($release['body'] ?? ''))),
             ],
-            'download_link' => $this->build_download_url($info),
-            'requires' => $info->requires ?? '',
-            'tested' => $info->tested ?? '',
-            'requires_php' => $info->requires_php ?? '',
-            'last_updated' => $info->last_updated ?? '',
-            'banners' => [],
-            'icons' => [],
         ];
     }
 
     /**
-     * Hook antes do download — valida uma última vez a licença e mostra mensagem amigável.
-     */
-    public function before_download($reply, $package, $upgrader) {
-        if (strpos((string) $package, 'mlla-token=') === false) {
-            return $reply;
-        }
-        $license = new MLLA_LicenseManager();
-        $state = $license->validate(true);
-        if (empty($state['premium']) && empty($state['allow_free_update'])) {
-            return new WP_Error(
-                'mlla_no_license',
-                'Sua licença ML Link Auditor não está ativa. Ative para receber atualizações automáticas.'
-            );
-        }
-        return $reply;
-    }
-
-    /**
-     * Força uma checagem agora (chamado pelo cron ou manualmente).
+     * Força uma checagem agora (botão do painel).
      */
     public function force_check(): array {
-        delete_transient(self::TRANSIENT);
-        // Limpa o transient oficial do WP pra forçar re-check
-        $site_transient = get_site_transient('update_plugins');
-        if ($site_transient) {
-            delete_site_transient('update_plugins');
-        }
+        $this->get_release(true);
+        delete_site_transient('update_plugins');
         return ['ok' => true, 'message' => 'Update check forçado.'];
-    }
-
-    /* ==================== Internals ==================== */
-
-    private function get_remote_info() {
-        $cached = get_transient(self::TRANSIENT);
-        if ($cached !== false && is_object($cached)) {
-            return $cached;
-        }
-        $url = $this->info_url;
-        $response = wp_remote_get($url, [
-            'timeout' => 8,
-            'sslverify' => true,
-            'headers' => ['Accept' => 'application/json'],
-        ]);
-        if (is_wp_error($response)) {
-            return null;
-        }
-        $code = (int) wp_remote_retrieve_response_code($response);
-        if ($code !== 200) {
-            return null;
-        }
-        $body = (string) wp_remote_retrieve_body($response);
-        $data = json_decode($body);
-        if (!is_object($data)) {
-            return null;
-        }
-        set_transient(self::TRANSIENT, $data, self::CACHE_TTL);
-        return $data;
-    }
-
-    /**
-     * Monta a URL de download com token assinado HMAC.
-     * Token = base64url(timestamp) + '.' + hash_hmac(timestamp, secret_key)
-     * O Hub valida o HMAC e o timestamp (janela de 5 minutos).
-     */
-    private function build_download_url(object $info): string {
-        $license = new MLLA_LicenseManager();
-        $serial = $license->get_serial();
-        $domain = wp_parse_url(home_url(), PHP_URL_HOST) ?: '';
-        $expires = time() + 600; // 10 min pra iniciar o download
-        $payload = sprintf('%s|%s|%s|%d', $this->product_id, $serial, $domain, $expires);
-        $signature = hash_hmac('sha256', $payload, $this->get_shared_secret());
-        $token = rtrim(strtr(base64_encode($payload), '+/', '-_'), '=') . '.' . $signature;
-        $rel = $info->download_path ?? ('updates/' . $this->product_id . '-' . ($info->version ?? $this->current_version) . '.zip');
-        return $this->hub_url . '/' . ltrim($rel, '/') . (strpos($rel, '?') === false ? '?' : '&') . 'token=' . $token;
-    }
-
-    private function get_shared_secret(): string {
-        // Segredo compartilhado entre plugin e Hub.
-        // O Hub deve usar o MESMO secret para validar tokens.
-        $license = new MLLA_LicenseManager();
-        $stored = get_option('mlla_updater_secret', '');
-        if (!$stored) {
-            $stored = wp_generate_password(48, false, false);
-            update_option('mlla_updater_secret', $stored, false);
-        }
-        return $stored;
     }
 
     public function get_current_version(): string {
         return $this->current_version;
     }
 
+    /**
+     * Versão remota somente quando ha ZIP exato publicado (usada no aviso do painel).
+     */
     public function get_remote_version_cached() {
-        $info = $this->get_remote_info();
-        return $info ? $info->version ?? null : null;
+        $release = $this->get_release();
+        if (!$release || $this->package_url($release) === '') {
+            return null;
+        }
+        $v = $this->release_version($release);
+        return $v !== '' ? $v : null;
+    }
+
+    /* ==================== Internals ==================== */
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    private function get_release(bool $force = false) {
+        $cached = get_transient(self::TRANSIENT);
+        if (!$force) {
+            if (is_array($cached)) {
+                return $cached;
+            }
+            if ($cached === 'error') {
+                return null;
+            }
+        }
+        $response = wp_remote_get(
+            sprintf('https://api.github.com/repos/%s/%s/releases/latest', self::GITHUB_USER, self::GITHUB_REPO),
+            [
+                'timeout' => 10,
+                'headers' => [
+                    'Accept'     => 'application/vnd.github+json',
+                    'User-Agent' => 'ML-Link-Auditor-Updater/' . $this->current_version,
+                ],
+            ]
+        );
+        $data = null;
+        if (!is_wp_error($response) && (int) wp_remote_retrieve_response_code($response) === 200) {
+            $data = json_decode((string) wp_remote_retrieve_body($response), true);
+        }
+        if (!is_array($data) || empty($data['tag_name'])) {
+            if (!is_array($cached)) {
+                set_transient(self::TRANSIENT, 'error', self::FAIL_TTL);
+            }
+            return null;
+        }
+        $ttl = $this->package_url($data) !== '' ? self::CACHE_TTL : self::FAIL_TTL;
+        set_transient(self::TRANSIENT, $data, $ttl);
+        return $data;
+    }
+
+    private function release_version(array $release): string {
+        return ltrim((string) ($release['tag_name'] ?? ''), 'vV');
+    }
+
+    private function package_url(array $release): string {
+        $expected = $this->plugin_slug . '-v' . $this->release_version($release) . '.zip';
+        foreach ((array) ($release['assets'] ?? []) as $asset) {
+            if (is_array($asset) && ($asset['name'] ?? '') === $expected && !empty($asset['browser_download_url'])) {
+                return (string) $asset['browser_download_url'];
+            }
+        }
+        return '';
+    }
+
+    private function icons(): array {
+        $base = plugin_dir_url($this->plugin_file) . 'assets/images/';
+        return [
+            '1x'      => $base . 'icon-128x128.png',
+            '2x'      => $base . 'icon-256x256.png',
+            'default' => $base . 'icon-256x256.png',
+        ];
     }
 }
 
@@ -684,7 +646,7 @@ if (!function_exists('mlla_license')) {
 if (!class_exists('ML_Link_Auditor', false)) {
 
 final class ML_Link_Auditor {
-    private const VERSION = '1.3.2';
+    private const VERSION = MLLA_VERSION;
     private const OPTION_SETTINGS = 'mlla_settings';
     private const OPTION_JOB = 'mlla_scan_job';
     private const OPTION_LICENSE = 'mlla_license_state';
@@ -819,6 +781,9 @@ final class ML_Link_Auditor {
         $job['run_id'] = '';
         $job['last_message'] = $this->t('Plugin desativado. Estado zerado.', 'Plugin deactivated. State cleared.', 'Plugin desactivado. Estado borrado.');
         $this->save_job($job);
+        // Agendamentos voltam no 'init' quando o plugin for reativado.
+        wp_clear_scheduled_hook('mlla_check_for_update');
+        wp_clear_scheduled_hook('mlla_daily_validate');
     }
 
 
@@ -2547,10 +2512,17 @@ private function save_quarantine_snapshot(int $post_id, string $reason, array $m
         if (!$remote || version_compare($current, $remote, '>=')) {
             return;
         }
-        $update_url = wp_nonce_url(
-            self_admin_url('update.php?action=upgrade-plugin&plugin=' . rawurlencode(plugin_basename(__FILE__))),
-            'upgrade-plugin_' . plugin_basename(__FILE__)
-        );
+        // O instalador do WP le o transient update_plugins; sem a oferta registrada nele,
+        // leva para a tela de atualizacoes (que refaz a checagem) em vez de "ja esta na ultima".
+        $wp_updates = get_site_transient('update_plugins');
+        if (is_object($wp_updates) && isset($wp_updates->response[plugin_basename(__FILE__)])) {
+            $update_url = wp_nonce_url(
+                self_admin_url('update.php?action=upgrade-plugin&plugin=' . rawurlencode(plugin_basename(__FILE__))),
+                'upgrade-plugin_' . plugin_basename(__FILE__)
+            );
+        } else {
+            $update_url = self_admin_url('update-core.php?force-check=1');
+        }
         echo '<div class="notice notice-info is-dismissible"><p>';
         echo '<strong>ML Link Auditor:</strong> nova versão <code>' . esc_html($remote) . '</code> disponível. ';
         echo '<a href="' . esc_url($update_url) . '">Atualizar agora</a>';
