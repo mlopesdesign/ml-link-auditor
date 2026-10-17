@@ -1,5 +1,13 @@
 # Changelog — ML Link Auditor
 
+## [1.4.0] — 2026-10-17
+
+- Licença pelo site tools.mlopesdesign.com.br (ML License Hub, cliente `ML_License_Client_V2`). O servidor antigo `license.mlopesdesign.com.br` não é mais consultado; a validação diária antiga (`mlla_daily_validate`) é desagendada.
+- Aceita a chave do Pacote Agência. Teste grátis de 30 dias por site, iniciado automaticamente na primeira visita ao painel.
+- Sem teste/licença: o painel fica só para consulta (ações de gravação AJAX e salvar configurações bloqueadas; pausar/parar continuam). Nada do que já foi feito no site é desfeito e nenhum dado é apagado.
+- Exportar CSV depende de `is_premium()` do Hub.
+- Aba Licença refeita no estilo do plugin; sem campos de servidor/Product ID.
+
 ## [1.3.3] — 2026-10-14
 
 - Atualizacao automatica pelo repositorio publico `ml-link-auditor-releases` (a rota de update do Hub nunca existiu).

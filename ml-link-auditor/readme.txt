@@ -4,11 +4,11 @@ Tags: broken links, audit, ajax, quarantine, links, joomla migration
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.3
+Stable tag: 1.4.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Audita links quebrados em posts e páginas com processamento AJAX em lote, sugestão de correção, quarentena, ação para rascunho e integração com o hub de licenças MLopes Design para recursos Pro.
+Audita links quebrados em posts e páginas com processamento AJAX em lote, sugestão de correção, quarentena, ação para rascunho e licença pelo site tools.mlopesdesign.com.br (teste grátis de 30 dias).
 
 == Description ==
 
@@ -21,21 +21,13 @@ O ML Link Auditor varre o conteúdo publicado do site procurando links internos 
 * Quarentena: toda ação destrutiva salva uma cópia do conteúdo original antes da alteração.
 * Movimentação de posts problemáticos para rascunho e restauração em massa.
 * Painel administrativo no padrão visual MLopes Design.
-* **Integração com o ML License Hub** para ativação de licença e recursos Pro.
-* **Trial automático de 30 dias** com todos os recursos Pro habilitados.
+* **Licença pelo site tools.mlopesdesign.com.br**: licença anual (1 site) ou Pacote Agência (todos os plugins ML em 5, 10 ou 50 sites).
+* **Teste grátis de 30 dias** por site, começado automaticamente na primeira visita ao painel.
 
-== Pro features (requer licença ativa) ==
+== Licença ==
 
-* Exportar resultados da varredura em CSV.
-* Exportar relatórios em PDF.
-* Varreduras agendadas (diárias, semanais).
-* Notificações por e-mail ao concluir varredura.
-* Ações em massa (bulk) sobre os resultados.
-* Mapeamento customizado de paths de migração (Joomla, Drupal, etc).
-* Suporte multi-site (network).
-* White-label (logo e cores).
-* API REST para integrações.
-* Webhooks (Slack, Discord, Teams).
+* Com teste grátis ou licença: todo o painel liberado, incluindo exportar os resultados em CSV.
+* Sem teste nem licença: o que já foi feito no site continua como está e nada é apagado (resultados, quarentena, links corrigidos, posts e configurações). Só o painel fica bloqueado para varrer, corrigir links, mexer na quarentena e salvar configurações.
 
 == Installation ==
 
@@ -44,6 +36,15 @@ O ML Link Auditor varre o conteúdo publicado do site procurando links internos 
 3. Acesse o menu "ML Link Auditor" no admin e inicie a varredura.
 
 == Changelog ==
+
+= 1.4.0 =
+* Licenca pelo site tools.mlopesdesign.com.br (ML License Hub). O servidor antigo license.mlopesdesign.com.br nao e mais consultado (nem a validacao diaria antiga).
+* Aceita a chave do Pacote Agencia (todos os plugins ML em varios sites).
+* Teste gratis de 30 dias por site. Quem ja usava o plugin recebe o teste automaticamente na primeira visita ao painel.
+* Sem teste ou licenca: o painel fica so para consulta (varrer, aplicar sugestao, troca manual, remover link, mover para rascunho, restaurar e limpar quarentena, restaurar rascunhos, resetar e salvar configuracoes ficam bloqueados). Pausar e parar uma varredura continuam liberados. O que ja foi feito no site continua como esta e nada e apagado.
+* Exportar CSV passa a depender do teste/licenca do novo site de licencas.
+* Aba Licenca refeita: situacao, plano, validade, ativar chave, teste gratis, conferir agora, remover deste site, links Comprar licenca e Minha conta, e quadro "Como funciona". Sem campos de servidor, e-mail e Product ID.
+* Lista de recursos "Pro" que nao existiam no plugin removida da tela e do readme.
 
 = 1.3.3 =
 * Atualizacao automatica passa a vir do repositorio publico mlopesdesign/ml-link-auditor-releases (GitHub Releases). A rota de atualizacao do Hub de licencas usada ate a 1.3.2 nao existia, entao as atualizacoes automaticas nao chegavam.

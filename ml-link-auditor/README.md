@@ -11,19 +11,14 @@ Plugin WordPress comercial da **MLopes Design** para auditoria de links em posts
 - Quarentena: cópia do conteúdo original antes de qualquer ação destrutiva, com restauração individual.
 - Movimentação de posts problemáticos para rascunho e restauração de rascunhos em massa.
 - Painel administrativo no padrão visual MLopes Design (hero, abas, cards, badges e tabelas premium).
-- **Integração com o ML License Hub** para ativação de licença e recursos Pro.
-- **Auto-update via Hub** — o plugin consulta `license.mlopesdesign.com.br` por novas versões.
-- **Trial automático de 30 dias** com todos os recursos Pro habilitados.
+- **Licença pelo site tools.mlopesdesign.com.br** (ML License Hub): licença anual (1 site) ou Pacote Agência.
+- **Atualização automática** pelo repositório público de releases no GitHub.
+- **Teste grátis de 30 dias** por site, iniciado automaticamente na primeira visita ao painel.
 
-## Recursos Pro (licença ativa)
+## Licença
 
-- Exportar resultados em CSV (com filtros).
-- Exportar relatórios em PDF.
-- Varreduras agendadas (diárias/semanais).
-- Notificações por e-mail.
-- Ações em massa.
-- Mapeamento de paths de migração (Joomla, Drupal, etc).
-- Suporte multi-site, white-label, API REST, webhooks.
+- Com teste ou licença: todo o painel liberado, incluindo exportar os resultados em CSV.
+- Sem teste nem licença: o painel fica só para consulta (varrer, corrigir links, quarentena e configurações bloqueados). O que já foi feito no site continua como está e nada é apagado.
 
 ## Requisitos
 
