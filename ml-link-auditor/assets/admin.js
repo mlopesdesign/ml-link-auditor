@@ -274,62 +274,7 @@ jQuery(function($){
   bindRowAction('.mlla-restore-quarantine', 'mlla_restore_quarantine', MLLA.strings.confirmRestore);
   bindRowAction('.mlla-delete-quarantine', 'mlla_delete_quarantine', MLLA.strings.confirmDeleteQuarantine);
 
-  // ===== v1.3.2: Licença + CSV Export =====
-
-  function licenseAction(action, $btn, busyText, extraData) {
-    if (!$btn || !$btn.length) return;
-    const original = $btn.text();
-    state.scanBusy = true;
-    $btn.prop('disabled', true).addClass('is-busy').text(busyText || original);
-    abortCurrentXHR();
-    state.currentXHR = request(action, extraData || {});
-    return state.currentXHR.done(function(resp) {
-      if (resp.success) {
-        toast(resp.data && resp.data.message ? resp.data.message : 'Operação concluída.', 'success', 4500);
-        if (resp.data && resp.data.state_html) {
-          $('#mlla-license-current-state').html(resp.data.state_html);
-        }
-        // Recarrega a página pra refletir novos gates Pro
-        setTimeout(function(){ window.location.reload(); }, 800);
-      } else {
-        toast((resp.data && resp.data.message) || 'Erro na operação.', 'error', 6000);
-        if (resp.data && resp.data.upgrade_url) {
-          setTimeout(function(){ window.location.href = resp.data.upgrade_url; }, 1200);
-        }
-      }
-    }).fail(function() {
-      toast('Erro de comunicação com o servidor.', 'error', 6000);
-    }).always(function() {
-      state.currentXHR = null;
-      state.scanBusy = false;
-      $btn.prop('disabled', false).removeClass('is-busy').text(original);
-    });
-  }
-
-  $('#mlla-activate-license').on('click', function() {
-    const $btn = $(this);
-    const key = ($('#mlla-license-key').val() || '').trim();
-    if (!key) { toast('Informe a chave de licença.', 'warning', 4000); return; }
-    licenseAction('mlla_activate_license', $btn, 'Ativando...', {
-      license_key: key,
-      email: $('#mlla-license-email').val() || ''
-    });
-  });
-
-  $('#mlla-start-trial').on('click', function() {
-    licenseAction('mlla_start_trial', $(this), 'Iniciando trial...', {
-      email: $('#mlla-license-email').val() || ''
-    });
-  });
-
-  $('#mlla-deactivate-license').on('click', function() {
-    if (!window.confirm('Tem certeza que deseja desativar a licença neste site?')) return;
-    licenseAction('mlla_deactivate_license', $(this), 'Desativando...', {});
-  });
-
-  $('#mlla-validate-license-now').on('click', function() {
-    licenseAction('mlla_validate_license_now', $(this), 'Validando...', {});
-  });
+  // ===== Licença (1.4.0): as ações da aba Licença são formulários (admin-post). =====
 
   $('#mlla-check-update').on('click', function() {
     const $btn = $(this);

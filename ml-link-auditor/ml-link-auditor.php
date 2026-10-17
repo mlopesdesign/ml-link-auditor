@@ -2,8 +2,8 @@
 /**
  * Plugin Name: ML Link Auditor
  * Plugin URI: https://mlopesdesign.com.br
- * Description: Audita links internos e externos em posts e páginas, executa varredura AJAX em lote, sugere correções, salva cópias em quarentena, pode mover conteúdos para rascunho e integra com o hub de licenças MLopes Design para recursos Pro.
- * Version: 1.3.3
+ * Description: Audita links internos e externos em posts e páginas, executa varredura AJAX em lote, sugere correções, salva cópias em quarentena, pode mover conteúdos para rascunho com licença pelo site tools.mlopesdesign.com.br (teste grátis de 30 dias).
+ * Version: 1.4.0
  * Author: Marcio Lopes
  * Author URI: https://mlopesdesign.com.br
  * License: GPL2+
@@ -18,390 +18,20 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+if (!defined('MLLA_VERSION')) {
+    define('MLLA_VERSION', '1.4.0');
+}
+
 /* ============================================================
- *  MLLA_LicenseManager — conversa com o ML License Hub
+ *  Licença — ML License Hub (tools.mlopesdesign.com.br)
  *  ============================================================
  *
- *  - Cache local com TTL de 12h (transient)
- *  - Grace period de 72h em caso de falha de rede
- *  - feature_set server-authoritative, com fallback binário e plano local
- *  - Helpers globais: mlla_can(), mlla_license()
- *
- *  @since 1.3.2
+ *  1.4.0: MLLA_LicenseManager agora fica em includes/ e usa o cliente
+ *  ML_License_Client_V2. O servidor antigo não é mais chamado.
  *  ============================================================ */
+require_once __DIR__ . '/includes/class-mlla-license-manager.php';
+MLLA_LicenseManager::boot();
 
-if (!defined('MLLA_VERSION')) {
-    define('MLLA_VERSION', '1.3.3');
-}
-
-if (!class_exists('MLLA_LicenseManager', false)) {
-
-final class MLLA_LicenseManager {
-    private const OPTION = 'mlla_license_state';
-    private const TRANSIENT = 'mlla_license_cache';
-    private const CACHE_TTL = 12 * HOUR_IN_SECONDS;
-    private const GRACE_PERIOD = 72 * HOUR_IN_SECONDS;
-    private const DEFAULT_HUB_URL = 'https://license.mlopesdesign.com.br/api/license.php';
-    private const DEFAULT_PRODUCT_ID = 'ml-link-auditor';
-
-    /** Capabilities por plano (fallback local caso feature_set venha vazio). */
-    private const PLAN_CAPABILITIES = [
-        'free' => ['scan', 'quarantine', 'manual_actions', 'basic_suggestions'],
-        'trial' => [
-            'scan', 'quarantine', 'manual_actions', 'basic_suggestions',
-            'csv_export', 'pdf_export', 'cron_schedules', 'email_notify',
-            'bulk_actions', 'migration_paths', 'per_post_scan',
-        ],
-        'full' => [
-            'scan', 'quarantine', 'manual_actions', 'basic_suggestions',
-            'csv_export', 'pdf_export', 'cron_schedules', 'email_notify',
-            'bulk_actions', 'migration_paths', 'per_post_scan',
-        ],
-        'lifetime' => [
-            'scan', 'quarantine', 'manual_actions', 'basic_suggestions',
-            'csv_export', 'pdf_export', 'cron_schedules', 'email_notify',
-            'bulk_actions', 'migration_paths', 'per_post_scan',
-            'multisite', 'white_label', 'api_rest', 'webhooks',
-        ],
-        'agency' => [
-            'scan', 'quarantine', 'manual_actions', 'basic_suggestions',
-            'csv_export', 'pdf_export', 'cron_schedules', 'email_notify',
-            'bulk_actions', 'migration_paths', 'per_post_scan',
-            'multisite', 'white_label', 'api_rest', 'webhooks',
-            'priority_support', 'custom_branding',
-        ],
-    ];
-
-    private const STATUS_LABELS = [
-        'active' => ['pt' => 'Ativa', 'en' => 'Active', 'es' => 'Activa'],
-        'lifetime' => ['pt' => 'Vitalícia', 'en' => 'Lifetime', 'es' => 'Vitalicia'],
-        'trial_active' => ['pt' => 'Trial ativo', 'en' => 'Trial active', 'es' => 'Trial activo'],
-        'trial_expired' => ['pt' => 'Trial expirado', 'en' => 'Trial expired', 'es' => 'Trial expirado'],
-        'free' => ['pt' => 'Free', 'en' => 'Free', 'es' => 'Free'],
-        'expired' => ['pt' => 'Expirada', 'en' => 'Expired', 'es' => 'Expirada'],
-        'not_found' => ['pt' => 'Não encontrada', 'en' => 'Not found', 'es' => 'No encontrada'],
-        'domain_mismatch' => ['pt' => 'Domínio incorreto', 'en' => 'Domain mismatch', 'es' => 'Dominio incorrecto'],
-        'deactivated' => ['pt' => 'Desativada', 'en' => 'Deactivated', 'es' => 'Desactivada'],
-        'inactive' => ['pt' => 'Inativa', 'en' => 'Inactive', 'es' => 'Inactiva'],
-        'hub_unreachable' => ['pt' => 'Hub indisponível', 'en' => 'Hub unreachable', 'es' => 'Hub no disponible'],
-    ];
-
-    /** @var array */
-    private $state;
-
-    public function __construct(?array $state = null) {
-        if ($state !== null) {
-            $this->state = $state;
-            return;
-        }
-        $stored = get_option(self::OPTION, []);
-        $defaults = [
-            'serial' => '',
-            'email' => '',
-            'product_id' => self::DEFAULT_PRODUCT_ID,
-            'hub_url' => self::DEFAULT_HUB_URL,
-            'info_url' => '', // obsoleto desde 1.3.3 (atualizacao via GitHub Releases); mantido por compatibilidade
-            'status' => 'inactive',
-            'plan' => 'free',
-            'premium' => false,
-            'feature_set' => [],
-            'domain' => '',
-            'site_url' => '',
-            'home_url' => '',
-            'expires_at' => '',
-            'grace_until' => '',
-            'days_left' => null,
-            'last_check' => '',
-            'last_message' => '',
-        ];
-        $this->state = wp_parse_args(is_array($stored) ? $stored : [], $defaults);
-    }
-
-    /* ============================================================
-     *  Getters
-     *  ============================================================ */
-
-    public function get_state(): array { return $this->state; }
-    public function get_plan(): string { return (string) ($this->state['plan'] ?? 'free'); }
-    public function get_status(): string { return (string) ($this->state['status'] ?? 'inactive'); }
-    public function is_premium(): bool { return (bool) ($this->state['premium'] ?? false); }
-    public function get_days_left() {
-        $dl = $this->state['days_left'] ?? null;
-        return $dl === null ? null : (int) $dl;
-    }
-    public function get_serial(): string { return (string) ($this->state['serial'] ?? ''); }
-    public function get_email(): string { return (string) ($this->state['email'] ?? ''); }
-    public function get_hub_url(): string { return (string) ($this->state['hub_url'] ?? self::DEFAULT_HUB_URL); }
-    public function get_info_url(): string {
-        $info = (string) ($this->state['info_url'] ?? '');
-        if ($info !== '') return $info;
-        return $this->get_hub_url() . '/updates/' . self::DEFAULT_PRODUCT_ID . '.json';
-    }
-    public function set_info_url(string $url): void {
-        $this->state['info_url'] = $url;
-        update_option(self::OPTION, $this->state, false);
-    }
-    public function get_product_id(): string { return (string) ($this->state['product_id'] ?? self::DEFAULT_PRODUCT_ID); }
-    public function get_expires_at(): string { return (string) ($this->state['expires_at'] ?? ''); }
-    public function get_feature_set(): array { return (array) ($this->state['feature_set'] ?? []); }
-    public function get_status_label(): string {
-        $status = $this->get_status();
-        $labels = self::STATUS_LABELS[$status] ?? self::STATUS_LABELS['inactive'];
-        $lang = $this->detect_lang();
-        return $labels[$lang] ?? $labels['en'];
-    }
-
-    /* ============================================================
-     *  Capability gate — server-authoritative, com fallback local
-     *  ============================================================ */
-
-    public function can(string $capability): bool {
-        // Features gratuitas sempre liberadas
-        $free_caps = self::PLAN_CAPABILITIES['free'];
-        if (in_array($capability, $free_caps, true)) {
-            return true;
-        }
-        if (!$this->is_premium()) {
-            return false;
-        }
-        $status = $this->get_status();
-        // Status que ainda dão acesso premium
-        $premium_status = ['active', 'lifetime', 'trial_active'];
-        if (!in_array($status, $premium_status, true)) {
-            return false;
-        }
-        // feature_set server-side tem prioridade (se vier como array de strings)
-        $features = $this->get_feature_set();
-        if (!empty($features)) {
-            // Suporta dois formatos: lista de strings OU objeto com 'features' (futuro)
-            if (isset($features[0]) && is_string($features[0])) {
-                return in_array($capability, $features, true);
-            }
-            if (isset($features['features']) && is_array($features['features'])) {
-                return in_array($capability, $features['features'], true);
-            }
-        }
-        // feature_set binário ('full')
-        if ($this->state['feature_set'] === 'full' || $this->state['feature_set'] === 'premium') {
-            return true;
-        }
-        // Fallback: capabilities pelo plano local
-        $caps = self::PLAN_CAPABILITIES[$this->get_plan()] ?? [];
-        return in_array($capability, $caps, true);
-    }
-
-    /* ============================================================
-     *  Ações contra o Hub
-     *  ============================================================ */
-
-    public function activate(string $license_key, string $email = ''): array {
-        if ($license_key === '') {
-            return ['success' => false, 'message' => 'Informe a chave de licença.'];
-        }
-        $license_key = trim($license_key);
-        $email = trim($email) ?: (string) get_option('admin_email');
-
-        $payload = $this->build_request_payload('activate_license', $license_key, $email);
-        $response = $this->call_hub($payload);
-        if (is_wp_error($response)) {
-            return ['success' => false, 'message' => $response->get_error_message()];
-        }
-        $this->save_state($response, $license_key, $email);
-        return [
-            'success' => !empty($response['valid']),
-            'message' => (string) ($response['message'] ?? ''),
-            'state' => $this->state,
-        ];
-    }
-
-    public function start_trial(string $email = ''): array {
-        $email = trim($email) ?: (string) get_option('admin_email');
-        $payload = $this->build_request_payload('start_trial', '', $email);
-        $response = $this->call_hub($payload);
-        if (is_wp_error($response)) {
-            return ['success' => false, 'message' => $response->get_error_message()];
-        }
-        $this->save_state($response, '', $email);
-        return [
-            'success' => !empty($response['valid']),
-            'message' => (string) ($response['message'] ?? ''),
-            'state' => $this->state,
-        ];
-    }
-
-    public function deactivate(): array {
-        $serial = $this->get_serial();
-        if ($serial === '') {
-            return ['success' => false, 'message' => 'Nenhuma licença ativa para desativar.'];
-        }
-        $payload = $this->build_request_payload('deactivate_license', $serial, $this->get_email());
-        $response = $this->call_hub($payload);
-        if (is_wp_error($response)) {
-            return ['success' => false, 'message' => $response->get_error_message()];
-        }
-        // Limpa estado local
-        $this->state = wp_parse_args([
-            'serial' => '',
-            'status' => 'inactive',
-            'plan' => 'free',
-            'premium' => false,
-            'feature_set' => [],
-            'expires_at' => '',
-            'days_left' => null,
-            'last_message' => (string) ($response['message'] ?? 'Licença removida.'),
-        ], $this->state);
-        $this->state['email'] = ''; // também limpa email
-        update_option(self::OPTION, $this->state, false);
-        delete_transient(self::TRANSIENT);
-        return ['success' => true, 'message' => (string) ($response['message'] ?? 'Licença removida.'), 'state' => $this->state];
-    }
-
-    public function validate(bool $force_remote = false): array {
-        if (!$force_remote) {
-            $cached = get_transient(self::TRANSIENT);
-            if ($cached !== false && is_array($cached)) {
-                $this->state = wp_parse_args($cached, $this->state);
-                return $this->state;
-            }
-        }
-
-        $serial = $this->get_serial();
-        $payload = $this->build_request_payload('validate_license', $serial, $this->get_email());
-        $response = $this->call_hub($payload);
-
-        if (is_wp_error($response)) {
-            return $this->handle_hub_failure($response);
-        }
-
-        $this->save_state($response, $serial, $this->get_email());
-        set_transient(self::TRANSIENT, $this->state, self::CACHE_TTL);
-        return $this->state;
-    }
-
-    /**
-     * Lista de capabilities disponíveis para exibição na UI.
-     * Retorna ['cap_id' => 'label traduzido'].
-     */
-    public function get_capabilities_catalog(): array {
-        return [
-            'scan'              => ['pt' => 'Varredura AJAX em lote', 'en' => 'Batched AJAX scan', 'es' => 'Escaneo AJAX en lotes'],
-            'quarantine'        => ['pt' => 'Quarentena de conteúdo', 'en' => 'Content quarantine', 'es' => 'Cuarentena de contenido'],
-            'manual_actions'    => ['pt' => 'Substituição e remoção manual', 'en' => 'Manual replace & remove', 'es' => 'Reemplazo y eliminación manual'],
-            'basic_suggestions' => ['pt' => 'Sugestões automáticas', 'en' => 'Automatic suggestions', 'es' => 'Sugerencias automáticas'],
-            'csv_export'        => ['pt' => 'Exportar resultados em CSV', 'en' => 'Export results as CSV', 'es' => 'Exportar resultados en CSV'],
-            'pdf_export'        => ['pt' => 'Exportar relatórios em PDF', 'en' => 'Export reports as PDF', 'es' => 'Exportar informes en PDF'],
-            'cron_schedules'    => ['pt' => 'Varreduras agendadas', 'en' => 'Scheduled scans', 'es' => 'Escaneos programados'],
-            'email_notify'      => ['pt' => 'Notificações por e-mail', 'en' => 'Email notifications', 'es' => 'Notificaciones por correo'],
-            'bulk_actions'      => ['pt' => 'Ações em massa (bulk)', 'en' => 'Bulk actions', 'es' => 'Acciones en masa'],
-            'migration_paths'   => ['pt' => 'Mapeamento de paths de migração', 'en' => 'Migration path mapping', 'es' => 'Mapeo de rutas de migración'],
-            'per_post_scan'     => ['pt' => 'Varredura por post específico', 'en' => 'Per-post scan', 'es' => 'Escaneo por entrada'],
-            'multisite'         => ['pt' => 'Suporte multi-site', 'en' => 'Multisite support', 'es' => 'Soporte multisitio'],
-            'white_label'       => ['pt' => 'White-label (logo e cores)', 'en' => 'White-label (logo & colors)', 'es' => 'Marca blanca'],
-            'api_rest'          => ['pt' => 'API REST para integrações', 'en' => 'REST API for integrations', 'es' => 'API REST para integraciones'],
-            'webhooks'          => ['pt' => 'Webhooks (Slack/Discord/Teams)', 'en' => 'Webhooks (Slack/Discord/Teams)', 'es' => 'Webhooks (Slack/Discord/Teams)'],
-            'priority_support'  => ['pt' => 'Suporte prioritário', 'en' => 'Priority support', 'es' => 'Soporte prioritario'],
-            'custom_branding'   => ['pt' => 'Branding customizado', 'en' => 'Custom branding', 'es' => 'Marca personalizada'],
-        ];
-    }
-
-    /* ============================================================
-     *  Internals
-     *  ============================================================ */
-
-    private function build_request_payload(string $action, string $license_key, string $email): array {
-        return [
-            'action' => $action,
-            'product_id' => $this->get_product_id(),
-            'license_key' => $license_key,
-            'domain' => wp_parse_url(home_url(), PHP_URL_HOST) ?: '',
-            'site_url' => site_url(),
-            'home_url' => home_url(),
-            'version' => MLLA_VERSION,
-            'admin_email' => $email,
-            'site_fingerprint' => $this->site_fingerprint(),
-        ];
-    }
-
-    private function call_hub(array $payload) {
-        $url = $this->get_hub_url();
-        $response = wp_remote_post($url, [
-            'timeout' => 10,
-            'redirection' => 0,
-            'sslverify' => true,
-            'body' => $payload,
-            'headers' => ['Accept' => 'application/json'],
-        ]);
-        if (is_wp_error($response)) {
-            return $response;
-        }
-        $code = (int) wp_remote_retrieve_response_code($response);
-        $body = (string) wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-        if (!is_array($data)) {
-            return new WP_Error(
-                'mlla_invalid_response',
-                sprintf('Resposta inválida do hub de licenças (HTTP %d).', $code)
-            );
-        }
-        return $data;
-    }
-
-    private function save_state(array $response, string $serial = '', string $email = ''): void {
-        $this->state = wp_parse_args([
-            'serial' => $serial ?: $this->state['serial'],
-            'email' => $email ?: $this->state['email'],
-            'status' => (string) ($response['status'] ?? $this->state['status']),
-            'plan' => (string) ($response['plan'] ?? $this->state['plan']),
-            'premium' => (bool) ($response['premium'] ?? $this->state['premium']),
-            'feature_set' => $response['feature_set'] ?? $this->state['feature_set'],
-            'domain' => (string) ($response['domain'] ?? $this->state['domain']),
-            'site_url' => (string) ($response['site_url'] ?? $this->state['site_url']),
-            'home_url' => (string) ($response['home_url'] ?? $this->state['home_url']),
-            'expires_at' => (string) ($response['expires_at'] ?? $this->state['expires_at']),
-            'grace_until' => (string) ($response['grace_until'] ?? $this->state['grace_until']),
-            'days_left' => $response['days_left'] ?? $this->state['days_left'],
-            'last_check' => current_time('mysql'),
-            'last_message' => (string) ($response['message'] ?? $this->state['last_message']),
-        ], $this->state);
-        update_option(self::OPTION, $this->state, false);
-    }
-
-    private function handle_hub_failure(WP_Error $error): array {
-        $last_check = strtotime((string) ($this->state['last_check'] ?? ''));
-        $grace_remaining = $last_check ? (self::GRACE_PERIOD - (time() - $last_check)) : 0;
-        if ($grace_remaining > 0 && !empty($this->state['plan']) && $this->state['plan'] !== 'free') {
-            $this->state['last_message'] = sprintf(
-                /* translators: %d: horas restantes de grace period */
-                'Hub indisponível. Usando cache por mais %d horas.',
-                max(1, (int) ceil($grace_remaining / HOUR_IN_SECONDS))
-            );
-            $this->state['status'] = $this->get_status();
-            update_option(self::OPTION, $this->state, false);
-            return $this->state;
-        }
-        // Grace expirado: bloqueia premium
-        $this->state['premium'] = false;
-        $this->state['status'] = 'hub_unreachable';
-        $this->state['last_message'] = $error->get_error_message();
-        update_option(self::OPTION, $this->state, false);
-        return $this->state;
-    }
-
-    private function site_fingerprint(): string {
-        $domain = wp_parse_url(home_url(), PHP_URL_HOST) ?: '';
-        return hash('sha256', strtolower($this->get_product_id()) . '|' . strtolower($domain));
-    }
-
-    private function detect_lang(): string {
-        $locale = function_exists('determine_locale') ? (string) determine_locale() : (string) get_locale();
-        $locale = strtolower($locale);
-        if (strpos($locale, 'pt') === 0) return 'pt';
-        if (strpos($locale, 'es') === 0) return 'es';
-        return 'en';
-    }
-}
-
-} // end if (!class_exists('MLLA_LicenseManager'))
 
 /* ============================================================
  *  MLLA_Updater — atualizacao via GitHub Releases (repositorio publico de ZIPs)
@@ -621,25 +251,10 @@ final class MLLA_Updater {
     }
 }
 
-/* Helper global: capability gate */
+/* Helper global: capability gate (1.4.0: recursos "Pro" = teste/licença do Hub, is_premium()) */
 if (!function_exists('mlla_can')) {
     function mlla_can(string $capability): bool {
-        static $license = null;
-        if ($license === null) {
-            $license = new MLLA_LicenseManager();
-        }
-        return $license->can($capability);
-    }
-}
-
-/* Helper global: acesso ao LicenseManager */
-if (!function_exists('mlla_license')) {
-    function mlla_license(): MLLA_LicenseManager {
-        static $license = null;
-        if ($license === null) {
-            $license = new MLLA_LicenseManager();
-        }
-        return $license;
+        return MLLA_LicenseManager::can($capability);
     }
 }
 
@@ -649,7 +264,6 @@ final class ML_Link_Auditor {
     private const VERSION = MLLA_VERSION;
     private const OPTION_SETTINGS = 'mlla_settings';
     private const OPTION_JOB = 'mlla_scan_job';
-    private const OPTION_LICENSE = 'mlla_license_state';
     private const NONCE_ACTION = 'mlla_admin_nonce';
     private const MENU_SLUG = 'ml-link-auditor';
     private const LOCK_TTL = 300;
@@ -698,31 +312,14 @@ final class ML_Link_Auditor {
         add_action('wp_ajax_mlla_refresh_tables', [$this, 'ajax_refresh_tables']);
         add_action('wp_ajax_mlla_restore_drafts_batch', [$this, 'ajax_restore_drafts_batch']);
 
-        // Licença (v1.3.2)
-        add_action('wp_ajax_mlla_activate_license', [$this, 'ajax_activate_license']);
-        add_action('wp_ajax_mlla_start_trial', [$this, 'ajax_start_trial']);
-        add_action('wp_ajax_mlla_deactivate_license', [$this, 'ajax_deactivate_license']);
-        add_action('wp_ajax_mlla_validate_license_now', [$this, 'ajax_validate_license_now']);
+        // Licença (1.4.0): ações da aba Licença ficam em MLLA_LicenseManager (admin-post).
 
         // Pro features (v1.3.2)
         add_action('wp_ajax_mlla_export_csv', [$this, 'ajax_export_csv']);
         add_action('wp_ajax_mlla_check_update', [$this, 'ajax_check_update']);
 
-        // Cron diário (v1.3.2) — adia para hook 'init' (mais seguro)
-        add_action('mlla_daily_validate', [$this, 'cron_validate_license']);
-        add_action('init', [$this, 'register_license_cron']);
-
         // Auto-update (v1.3.2): instancia o Updater.
         $this->updater = new MLLA_Updater(__FILE__, 'ml-link-auditor');
-    }
-
-    /**
-     * Registra cron de validação diária de licença. Chamado via hook 'init'.
-     */
-    public function register_license_cron(): void {
-        if (!wp_next_scheduled('mlla_daily_validate')) {
-            wp_schedule_event(time() + HOUR_IN_SECONDS, 'daily', 'mlla_daily_validate');
-        }
     }
 
     public function activate(): void {
@@ -730,15 +327,6 @@ final class ML_Link_Auditor {
             $this->create_tables();
             if (!get_option(self::OPTION_SETTINGS)) {
                 add_option(self::OPTION_SETTINGS, $this->get_default_settings());
-            }
-            if (!get_option(self::OPTION_LICENSE)) {
-                add_option(self::OPTION_LICENSE, [
-                    'serial' => '',
-                    'email' => '',
-                    'status' => 'inactive',
-                    'plan' => 'free',
-                    'last_check' => '',
-                ]);
             }
             if (!get_option(self::OPTION_JOB)) {
                 add_option(self::OPTION_JOB, $this->default_job_state());
@@ -948,6 +536,15 @@ final class ML_Link_Auditor {
         check_ajax_referer(self::NONCE_ACTION, 'nonce');
     }
 
+    /**
+     * AJAX de gravação do painel: exige teste/licença do Hub (1.4.0).
+     * Sem licença o painel fica só para consulta; nada do que já foi feito é desfeito.
+     */
+    private function require_write_ajax(): void {
+        $this->require_admin_ajax();
+        MLLA_LicenseManager::guard_write(true);
+    }
+
     public function register_admin_menu(): void {
         add_menu_page(
             'ML Link Auditor',
@@ -1015,6 +612,7 @@ final class ML_Link_Auditor {
             wp_die('Forbidden');
         }
         check_admin_referer('mlla_save_settings');
+        MLLA_LicenseManager::guard_write();
         $input = isset($_POST['settings']) && is_array($_POST['settings']) ? wp_unslash($_POST['settings']) : [];
         $post_types = isset($input['scan_post_types']) && is_array($input['scan_post_types']) ? array_map('sanitize_key', $input['scan_post_types']) : ['post', 'page'];
         $settings = [
@@ -1041,7 +639,10 @@ final class ML_Link_Auditor {
         $stats = $this->get_dashboard_stats();
         $saved = isset($_GET['saved']) ? 1 : 0;
         $settings = $this->get_settings();
-        $license = get_option(self::OPTION_LICENSE, []);
+        $license = MLLA_LicenseManager::get_license_summary();
+        $locked = !$license['active'];
+        $lic_notice = isset($_GET['mlla_notice']) ? sanitize_text_field(wp_unslash($_GET['mlla_notice'])) : '';
+        $lic_notice_type = isset($_GET['mlla_notice_type']) && 'error' === sanitize_key(wp_unslash($_GET['mlla_notice_type'])) ? 'error' : 'success';
         $results = $wpdb->get_results("SELECT * FROM {$this->table_results} ORDER BY FIELD(status_code, 'broken', 'redirect', 'timeout', 'invalid', 'ok'), last_seen DESC LIMIT 200");
         $quarantine = $wpdb->get_results("SELECT * FROM {$this->table_quarantine} WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 100");
         $public_post_types = get_post_types(['public' => true], 'objects');
@@ -1067,10 +668,20 @@ final class ML_Link_Auditor {
                     <span class="mlla-version-badge">v<?php echo esc_html(self::VERSION); ?></span>
                     <div class="mlla-hero-tags">
                         <span class="mlla-chip"><?php echo esc_html($this->translate_status((string) $job['status'])); ?></span>
-                        <span class="mlla-chip"><?php echo esc_html($this->t('Plano', 'Plan', 'Plan') . ': ' . strtoupper((string) ($license['plan'] ?? 'FREE'))); ?></span>
+                        <span class="mlla-chip"><?php echo esc_html($this->t('Licença', 'License', 'Licencia') . ': ' . $license['label']); ?></span>
                     </div>
                 </div>
             </section>
+
+            <?php if ($lic_notice !== ''): ?>
+                <div class="mlla-lock-notice <?php echo $lic_notice_type === 'error' ? 'is-error' : 'is-success'; ?>" role="status"><?php echo esc_html($lic_notice); ?></div>
+            <?php endif; ?>
+            <?php if ($locked): ?>
+                <div class="mlla-lock-notice" role="note">
+                    <strong>Sem licença ativa:</strong> o painel está só para consulta (varrer, corrigir links, quarentena e configurações ficam bloqueados). O que já foi feito no site continua como está e nada é apagado.
+                    <a href="<?php echo esc_url(MLLA_LicenseManager::license_url()); ?>">Ativar licença</a>
+                </div>
+            <?php endif; ?>
 
             <nav class="mlla-tab-nav" aria-label="<?php echo esc_attr($this->t('Navegação do plugin', 'Plugin navigation', 'Navegación del plugin')); ?>">
                 <?php
@@ -1213,61 +824,108 @@ final class ML_Link_Auditor {
             </section>
 
             <section id="mlla-tab-license" class="mlla-tab-panel <?php echo $active_tab === 'license' ? 'is-active' : ''; ?>">
+                <?php
+                $lic_badges = ['full' => 'mlla-badge-success', 'trial' => 'mlla-badge-info', 'free' => 'mlla-badge-warning'];
+                $lic_badge = $lic_badges[$license['tone']] ?? 'mlla-badge-muted';
+                $lic_post = admin_url('admin-post.php');
+                if ($license['active'] && $license['plan'] === 'lifetime') {
+                    $lic_valid = 'Sem vencimento';
+                } elseif ($license['active']) {
+                    $lic_valid = $license['expires_label'] !== '' ? $license['expires_label'] : 'Sem vencimento';
+                } else {
+                    $lic_valid = '—';
+                }
+                ?>
+                <div class="mlla-summary-cards">
+                    <div class="mlla-summary-box"><span>Situação</span><strong><?php echo esc_html($license['label']); ?></strong></div>
+                    <div class="mlla-summary-box"><span>Plano</span><strong><?php echo esc_html($license['plan_label']); ?></strong></div>
+                    <div class="mlla-summary-box"><span>Válida até</span><strong><?php echo esc_html($lic_valid); ?></strong></div>
+                    <div class="mlla-summary-box"><span>Dias restantes</span><strong><?php echo esc_html($license['active'] && $license['days_left'] !== null && $license['expires_label'] !== '' ? (string) (int) $license['days_left'] : '—'); ?></strong></div>
+                </div>
                 <div class="mlla-grid">
                     <article class="mlla-card">
                         <div class="mlla-card-header">
                             <div>
-                                <h2><?php echo esc_html($this->t('Status da licença', 'License status', 'Estado de la licencia')); ?></h2>
-                                <p class="mlla-muted"><?php echo esc_html($this->t('Validação remota no servidor de licenças MLopes Design.', 'Remote validation on the MLopes Design license server.', 'Validación remota en el servidor de licencias MLopes Design.')); ?></p>
+                                <h2>Licença</h2>
+                                <p class="mlla-muted"><?php echo esc_html($license['domain']); ?> · tools.mlopesdesign.com.br</p>
                             </div>
+                            <span class="mlla-badge <?php echo esc_attr($lic_badge); ?>"><?php echo esc_html($license['label']); ?></span>
                         </div>
-                        <?php
-                        $state = mlla_license()->get_state();
-                        $show_activation_form = empty($state['serial']) && ($state['status'] === 'inactive' || $state['status'] === 'free');
-                        ?>
-                        <div id="mlla-license-current-state">
-                            <?php echo $this->render_license_state($state); ?>
-                        </div>
+                        <p class="mlla-license-message"><?php echo esc_html($license['message']); ?></p>
 
-                        <?php if ($show_activation_form): ?>
-                            <div class="mlla-license-form-wrap">
-                                <h3><?php echo esc_html($this->t('Ativar licença', 'Activate license', 'Activar licencia')); ?></h3>
-                                <form id="mlla-license-form" class="mlla-form-grid">
-                                    <div class="mlla-field mlla-field-full">
-                                        <label for="mlla-license-key"><?php echo esc_html($this->t('Chave de licença', 'License key', 'Clave de licencia')); ?></label>
-                                        <input id="mlla-license-key" type="text" name="license_key" placeholder="MLI-XXXXXX-XXXXXX-XXXXXX-XXXXXX" autocomplete="off">
-                                    </div>
-                                    <div class="mlla-field mlla-field-full">
-                                        <label for="mlla-license-email"><?php echo esc_html($this->t('E-mail da compra', 'Purchase email', 'Correo de la compra')); ?></label>
-                                        <input id="mlla-license-email" type="email" name="email" value="<?php echo esc_attr((string) get_option('admin_email')); ?>">
-                                    </div>
-                                    <div class="mlla-form-footer">
-                                        <button type="button" id="mlla-activate-license" class="button button-primary"><?php echo esc_html($this->t('Ativar licença', 'Activate license', 'Activar licencia')); ?></button>
-                                        <button type="button" id="mlla-start-trial" class="button"><?php echo esc_html($this->t('Iniciar trial de 30 dias', 'Start 30-day trial', 'Iniciar trial de 30 días')); ?></button>
-                                    </div>
-                                    <p class="mlla-muted"><?php echo esc_html($this->t('Trial dá acesso a todos os recursos Pro por 30 dias, sem cartão.', 'Trial grants access to all Pro features for 30 days, no card required.', 'El trial da acceso a todas las funciones Pro por 30 días, sin tarjeta.')); ?></p>
+                        <?php if ($license['mode'] === 'license' && $license['key_masked'] !== ''): ?>
+                            <ul class="mlla-list mlla-license-state">
+                                <li><strong>Chave neste site:</strong> <code><?php echo esc_html($license['key_masked']); ?></code></li>
+                            </ul>
+                            <div class="mlla-form-footer mlla-license-actions">
+                                <form method="post" action="<?php echo esc_url($lic_post); ?>">
+                                    <?php wp_nonce_field('mlla_license_sync'); ?>
+                                    <input type="hidden" name="action" value="mlla_license_sync">
+                                    <input type="hidden" name="mlla_op" value="check">
+                                    <button type="submit" class="button button-primary">Conferir agora</button>
+                                </form>
+                                <form method="post" action="<?php echo esc_url($lic_post); ?>" onsubmit="return window.confirm('Remover a licença deste site? A chave poderá ser usada em outro site.');">
+                                    <?php wp_nonce_field('mlla_license_remove'); ?>
+                                    <input type="hidden" name="action" value="mlla_license_remove">
+                                    <button type="submit" class="button mlla-btn-danger">Remover deste site</button>
                                 </form>
                             </div>
                         <?php else: ?>
-                            <div class="mlla-form-footer">
-                                <button type="button" id="mlla-validate-license-now" class="button"><?php echo esc_html($this->t('Re-validar agora', 'Re-validate now', 'Re-validar ahora')); ?></button>
-                                <button type="button" id="mlla-check-update" class="button"><?php echo esc_html($this->t('Verificar atualizações', 'Check for updates', 'Buscar actualizaciones')); ?></button>
-                                <button type="button" id="mlla-deactivate-license" class="button mlla-btn-danger"><?php echo esc_html($this->t('Desativar neste site', 'Deactivate on this site', 'Desactivar en este sitio')); ?></button>
+                            <div class="mlla-license-form-wrap">
+                                <h3>Ativar licença</h3>
+                                <form method="post" action="<?php echo esc_url($lic_post); ?>" class="mlla-form-grid">
+                                    <?php wp_nonce_field('mlla_license_activate'); ?>
+                                    <input type="hidden" name="action" value="mlla_license_activate">
+                                    <div class="mlla-field mlla-field-full">
+                                        <label for="mlla-license-key">Chave da licença</label>
+                                        <input id="mlla-license-key" type="text" name="license_key" value="" placeholder="Cole aqui a sua chave" autocomplete="off" spellcheck="false">
+                                    </div>
+                                    <div class="mlla-form-footer">
+                                        <button type="submit" class="button button-primary">Ativar licença</button>
+                                    </div>
+                                </form>
+                            </div>
+                            <div class="mlla-form-footer mlla-license-actions">
+                                <?php if ($license['can_start_trial']): ?>
+                                    <form method="post" action="<?php echo esc_url($lic_post); ?>">
+                                        <?php wp_nonce_field('mlla_license_sync'); ?>
+                                        <input type="hidden" name="action" value="mlla_license_sync">
+                                        <input type="hidden" name="mlla_op" value="trial">
+                                        <button type="submit" class="button">Começar teste grátis de 30 dias</button>
+                                    </form>
+                                <?php elseif ($license['is_trial']): ?>
+                                    <form method="post" action="<?php echo esc_url($lic_post); ?>">
+                                        <?php wp_nonce_field('mlla_license_sync'); ?>
+                                        <input type="hidden" name="action" value="mlla_license_sync">
+                                        <input type="hidden" name="mlla_op" value="check">
+                                        <button type="submit" class="button">Conferir agora</button>
+                                    </form>
+                                <?php endif; ?>
+                                <a class="button" href="<?php echo esc_url(MLLA_LicenseManager::BUY_URL); ?>" target="_blank" rel="noopener">Comprar licença</a>
+                                <a class="button" href="<?php echo esc_url(MLLA_LicenseManager::ACCOUNT_URL); ?>" target="_blank" rel="noopener">Minha conta</a>
                             </div>
                         <?php endif; ?>
+
+                        <div class="mlla-form-footer mlla-license-actions">
+                            <button type="button" id="mlla-check-update" class="button"><?php echo esc_html($this->t('Verificar atualizações', 'Check for updates', 'Buscar actualizaciones')); ?></button>
+                        </div>
                         <div id="mlla-update-info" class="mlla-muted" style="margin-top:12px;font-size:12px"></div>
                     </article>
                     <article class="mlla-card">
                         <div class="mlla-card-header">
                             <div>
-                                <h2><?php echo esc_html($this->t('Seu plano inclui', 'Your plan includes', 'Tu plan incluye')); ?></h2>
-                                <p class="mlla-muted"><?php echo esc_html($this->t('Compare recursos disponíveis na sua assinatura.', 'Compare features available in your subscription.', 'Compara funciones disponibles en tu suscripción.')); ?></p>
+                                <h2>Como funciona</h2>
+                                <p class="mlla-muted">Licença pelo site tools.mlopesdesign.com.br</p>
                             </div>
                         </div>
-                        <?php $this->render_features_catalog(); ?>
-                        <div class="mlla-form-footer">
-                            <a href="https://mlopesdesign.com.br/produtos/ml-link-auditor" target="_blank" rel="noopener" class="button"><?php echo esc_html($this->t('Comparar planos', 'Compare plans', 'Comparar planes')); ?></a>
-                        </div>
+                        <ul class="mlla-list mlla-how-list">
+                            <li><strong>Teste grátis:</strong> 30 dias com tudo liberado, uma vez por site. Reinstalar não reinicia a contagem.</li>
+                            <li><strong>Licença anual:</strong> vale em 1 site. Para usar em outro, remova deste site.</li>
+                            <li><strong>Pacote Agência:</strong> uma chave para todos os plugins ML em 5, 10 ou 50 sites.</li>
+                            <li><strong>Sem licença:</strong> o que já foi feito no site continua como está e nada é apagado (resultados, quarentena, links corrigidos e configurações). Só o painel fica bloqueado para varrer, corrigir links, mexer na quarentena e salvar configurações.</li>
+                            <li><strong>Com teste ou licença:</strong> todo o painel liberado, incluindo exportar os resultados em CSV.</li>
+                        </ul>
+                        <p class="mlla-muted">A licença é conferida uma vez por dia. Sem internet, o painel continua liberado por até 7 dias.</p>
                     </article>
                 </div>
             </section>
@@ -1341,7 +999,7 @@ final class ML_Link_Auditor {
     }
 
     public function ajax_start_scan(): void {
-        $this->require_admin_ajax();
+        $this->require_write_ajax();
         @set_time_limit(0);
         if (function_exists('ignore_user_abort')) {
             @ignore_user_abort(true);
@@ -1381,7 +1039,7 @@ private function build_post_queue(): array {
     }
 
     public function ajax_process_scan(): void {
-        $this->require_admin_ajax();
+        $this->require_write_ajax();
         @set_time_limit(0);
         if (function_exists('ignore_user_abort')) {
             @ignore_user_abort(true);
@@ -2022,7 +1680,7 @@ private function find_upload_file_by_basename(string $baseDir, string $basename)
 }
 
 public function ajax_resume_scan(): void {
-    $this->require_admin_ajax();
+    $this->require_write_ajax();
     $job = $this->get_job();
     if ($job['status'] === 'paused') {
         if ((int) ($job['current_index'] ?? 0) >= (int) ($job['total_posts'] ?? 0)) {
@@ -2063,7 +1721,7 @@ public function ajax_stop_scan(): void {
 }
 
 public function ajax_reset_scan(): void {
-    $this->require_admin_ajax();
+    $this->require_write_ajax();
     global $wpdb;
     $wpdb->query("TRUNCATE TABLE {$this->table_results}");
     $wpdb->query("TRUNCATE TABLE {$this->table_quarantine}");
@@ -2099,7 +1757,7 @@ private function save_quarantine_snapshot(int $post_id, string $reason, array $m
     }
 
     public function ajax_apply_suggestion(): void {
-        $this->require_admin_ajax();
+        $this->require_write_ajax();
         $result_id = isset($_POST['result_id']) ? (int) $_POST['result_id'] : 0;
         $record = $this->get_result_record($result_id);
         if (!$record || empty($record->suggestion_url)) {
@@ -2110,7 +1768,7 @@ private function save_quarantine_snapshot(int $post_id, string $reason, array $m
     }
 
     public function ajax_replace_link(): void {
-        $this->require_admin_ajax();
+        $this->require_write_ajax();
         $result_id = isset($_POST['result_id']) ? (int) $_POST['result_id'] : 0;
         $new_url = isset($_POST['new_url']) ? esc_url_raw(wp_unslash($_POST['new_url'])) : '';
         if ($new_url === '') {
@@ -2174,7 +1832,7 @@ private function save_quarantine_snapshot(int $post_id, string $reason, array $m
     }
 
     public function ajax_remove_link(): void {
-        $this->require_admin_ajax();
+        $this->require_write_ajax();
         $result_id = isset($_POST['result_id']) ? (int) $_POST['result_id'] : 0;
         $record = $this->get_result_record($result_id);
         if (!$record) {
@@ -2225,7 +1883,7 @@ private function save_quarantine_snapshot(int $post_id, string $reason, array $m
     }
 
     public function ajax_move_post_to_draft(): void {
-        $this->require_admin_ajax();
+        $this->require_write_ajax();
         $post_id = isset($_POST['post_id']) ? (int) $_POST['post_id'] : 0;
         if ($post_id < 1) {
             wp_send_json_error(['message' => $this->t('Post inválido.', 'Invalid post.', 'Post inválido.')], 400);
@@ -2235,7 +1893,7 @@ private function save_quarantine_snapshot(int $post_id, string $reason, array $m
     }
 
     public function ajax_restore_quarantine(): void {
-        $this->require_admin_ajax();
+        $this->require_write_ajax();
         global $wpdb;
         $id = isset($_POST['quarantine_id']) ? (int) $_POST['quarantine_id'] : 0;
         $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$this->table_quarantine} WHERE id = %d", $id));
@@ -2252,7 +1910,7 @@ private function save_quarantine_snapshot(int $post_id, string $reason, array $m
     }
 
     public function ajax_delete_quarantine(): void {
-        $this->require_admin_ajax();
+        $this->require_write_ajax();
         global $wpdb;
         $id = isset($_POST['quarantine_id']) ? (int) $_POST['quarantine_id'] : 0;
         if ($id < 1) {
@@ -2271,7 +1929,7 @@ private function save_quarantine_snapshot(int $post_id, string $reason, array $m
      * incluindo os que o usuário estava escrevendo manualmente.
      */
     public function ajax_restore_drafts_batch(): void {
-        $this->require_admin_ajax();
+        $this->require_write_ajax();
         global $wpdb;
 
         $snapshots = $wpdb->get_results(
@@ -2327,77 +1985,18 @@ private function save_quarantine_snapshot(int $post_id, string $reason, array $m
     }
 
     /* ============================================================
-     *  Licença + Pro features (v1.3.2)
+     *  Recursos com teste/licença (1.4.0: critério = is_premium() do Hub)
      *  ============================================================ */
-
-    public function ajax_activate_license(): void {
-        $this->require_admin_ajax();
-        if (!current_user_can('manage_options')) {
-            wp_send_json_error(['message' => 'Acesso negado.'], 403);
-        }
-        $key = isset($_POST['license_key']) ? sanitize_text_field(wp_unslash($_POST['license_key'])) : '';
-        $email = isset($_POST['email']) ? sanitize_email(wp_unslash($_POST['email'])) : '';
-        $license = new MLLA_LicenseManager();
-        $result = $license->activate($key, $email);
-        if (!$result['success']) {
-            wp_send_json_error(['message' => $result['message']]);
-        }
-        wp_send_json_success([
-            'message' => $result['message'],
-            'state' => $result['state'],
-            'state_html' => $this->render_license_state($result['state']),
-        ]);
-    }
-
-    public function ajax_start_trial(): void {
-        $this->require_admin_ajax();
-        $email = isset($_POST['email']) ? sanitize_email(wp_unslash($_POST['email'])) : '';
-        $license = new MLLA_LicenseManager();
-        $result = $license->start_trial($email);
-        if (!$result['success']) {
-            wp_send_json_error(['message' => $result['message']]);
-        }
-        wp_send_json_success([
-            'message' => $result['message'],
-            'state' => $result['state'],
-            'state_html' => $this->render_license_state($result['state']),
-        ]);
-    }
-
-    public function ajax_deactivate_license(): void {
-        $this->require_admin_ajax();
-        $license = new MLLA_LicenseManager();
-        $result = $license->deactivate();
-        if (!$result['success']) {
-            wp_send_json_error(['message' => $result['message']]);
-        }
-        wp_send_json_success([
-            'message' => $result['message'],
-            'state' => $result['state'],
-            'state_html' => $this->render_license_state($result['state']),
-        ]);
-    }
-
-    public function ajax_validate_license_now(): void {
-        $this->require_admin_ajax();
-        $license = new MLLA_LicenseManager();
-        $state = $license->validate(true);
-        wp_send_json_success([
-            'message' => $state['last_message'] ?? 'Validação concluída.',
-            'state' => $state,
-            'state_html' => $this->render_license_state($state),
-        ]);
-    }
 
     /**
      * Exporta os resultados da varredura em CSV.
-     * Feature Pro (gate: csv_export). Bloqueia com 402 se não tiver licença ativa.
+     * Recurso do teste/licença (gate: csv_export → is_premium()). Bloqueia com 402 sem teste/licença.
      */
     public function ajax_export_csv(): void {
         $this->require_admin_ajax();
         if (!mlla_can('csv_export')) {
             wp_send_json_error([
-                'message' => 'Recurso Pro. Ative sua licença para exportar.',
+                'message' => 'Exportar CSV faz parte do teste grátis e da licença. Ative na aba Licença.',
                 'upgrade_url' => admin_url('admin.php?page=ml-link-auditor&tab=license'),
             ], 402);
         }
@@ -2473,11 +2072,6 @@ private function save_quarantine_snapshot(int $post_id, string $reason, array $m
         exit;
     }
 
-    public function cron_validate_license(): void {
-        $license = new MLLA_LicenseManager();
-        $license->validate(true);
-    }
-
     /**
      * AJAX para o admin forçar checagem de update agora.
      */
@@ -2530,52 +2124,6 @@ private function save_quarantine_snapshot(int $post_id, string $reason, array $m
     }
 
     /**
-     * Renderiza o HTML do estado de licença para uso via AJAX.
-     */
-    private function render_license_state(array $state): string {
-        $status = (string) ($state['status'] ?? 'inactive');
-        $plan = strtoupper((string) ($state['plan'] ?? 'FREE'));
-        $is_premium = !empty($state['premium']);
-        $days_left = $state['days_left'] ?? null;
-        $expires_at = $state['expires_at'] ?? '';
-        $last_check = $state['last_check'] ?? '';
-        $last_message = $state['last_message'] ?? '';
-
-        $status_badges = [
-            'active' => 'mlla-badge-success',
-            'lifetime' => 'mlla-badge-success',
-            'trial_active' => 'mlla-badge-info',
-            'free' => 'mlla-badge-muted',
-            'expired' => 'mlla-badge-danger',
-            'trial_expired' => 'mlla-badge-warning',
-            'hub_unreachable' => 'mlla-badge-warning',
-        ];
-        $cls = $status_badges[$status] ?? 'mlla-badge-muted';
-
-        ob_start();
-        ?>
-        <ul class="mlla-list mlla-license-state">
-            <li><strong>Status:</strong> <span class="mlla-badge <?php echo esc_attr($cls); ?>"><?php echo esc_html(ucfirst(str_replace('_', ' ', $status))); ?></span></li>
-            <li><strong>Plano:</strong> <?php echo esc_html($plan); ?></li>
-            <?php if ($expires_at !== ''): ?>
-                <li><strong>Expira em:</strong> <?php echo esc_html($expires_at); ?>
-                    <?php if ($days_left !== null): ?>
-                        (<?php echo (int) $days_left; ?> dias)
-                    <?php endif; ?>
-                </li>
-            <?php elseif ($status === 'lifetime'): ?>
-                <li><strong>Expira em:</strong> Vitalício</li>
-            <?php endif; ?>
-            <li><strong>Última verificação:</strong> <?php echo esc_html($last_check ?: 'Nunca'); ?></li>
-            <?php if ($last_message !== ''): ?>
-                <li><strong>Mensagem:</strong> <?php echo esc_html($last_message); ?></li>
-            <?php endif; ?>
-        </ul>
-        <?php
-        return (string) ob_get_clean();
-    }
-
-    /**
      * Renderiza o botão "Exportar CSV" com gate de capability.
      * Se o usuário não tem csv_export, mostra botão desabilitado com badge PRO
      * e tooltip apontando pra aba Licença.
@@ -2585,7 +2133,7 @@ private function save_quarantine_snapshot(int $post_id, string $reason, array $m
         $disabled = $has_cap ? '' : 'disabled aria-disabled="true"';
         $title = $has_cap
             ? esc_attr($this->t('Exportar resultados em CSV', 'Export results as CSV', 'Exportar resultados en CSV'))
-            : esc_attr($this->t('Recurso Pro. Ative sua licença para exportar.', 'Pro feature. Activate your license to export.', 'Función Pro. Activa tu licencia para exportar.'));
+            : esc_attr($this->t('Disponível no teste grátis e na licença. Ative na aba Licença.', 'Available with the free trial or a license. Activate it in the License tab.', 'Disponible con la prueba gratuita o una licencia. Actívela en la pestaña Licencia.'));
         ?>
         <div class="mlla-export-csv-wrap" data-pro-cap="csv_export">
             <button type="button"
@@ -2605,36 +2153,6 @@ private function save_quarantine_snapshot(int $post_id, string $reason, array $m
                 </small>
             <?php endif; ?>
         </div>
-        <?php
-    }
-
-    /**
-     * Renderiza o catálogo de features com check/x baseado em can($cap).
-     */
-    private function render_features_catalog(): void {
-        $license = mlla_license();
-        $catalog = $license->get_capabilities_catalog();
-        $lang = function_exists('determine_locale') ? (string) determine_locale() : (string) get_locale();
-        $lang = strtolower($lang);
-        if (strpos($lang, 'pt') === 0) $lang = 'pt';
-        elseif (strpos($lang, 'es') === 0) $lang = 'es';
-        else $lang = 'en';
-        ?>
-        <ul class="mlla-list mlla-features-list">
-            <?php foreach ($catalog as $cap => $labels):
-                $has = mlla_can($cap);
-                $label = $labels[$lang] ?? $labels['en'];
-                $is_pro = !in_array($cap, ['scan', 'quarantine', 'manual_actions', 'basic_suggestions'], true);
-                ?>
-                <li class="mlla-feature-row <?php echo $has ? 'is-active' : 'is-locked'; ?>">
-                    <span class="mlla-feature-icon" aria-hidden="true"><?php echo $has ? '✓' : '✗'; ?></span>
-                    <span class="mlla-feature-label"><?php echo esc_html($label); ?></span>
-                    <?php if ($is_pro && !$has): ?>
-                        <span class="mlla-pro-badge">PRO</span>
-                    <?php endif; ?>
-                </li>
-            <?php endforeach; ?>
-        </ul>
         <?php
     }
 

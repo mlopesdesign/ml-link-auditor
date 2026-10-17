@@ -168,3 +168,12 @@ button.is-busy,button[disabled].mlla-pro-locked{cursor:not-allowed;opacity:.55}
 .mlla-badge-warning{background:var(--mlla-warning-soft);color:var(--mlla-warning)}
 .mlla-badge-danger{background:var(--mlla-danger-soft);color:var(--mlla-danger)}
 .mlla-badge-muted{background:#eef2f6;color:#52606d}
+/* ===== 1.4.0: Licença pelo site tools.mlopesdesign.com.br ===== */
+.mlla-lock-notice{margin:0 0 16px;padding:12px 16px;border:1px solid #f3d2b5;border-left:4px solid var(--mlla-warning);border-radius:12px;background:#fffaf3;color:var(--mlla-ink);font-size:13px;line-height:1.5}
+.mlla-lock-notice a{margin-left:6px;font-weight:700;color:var(--mlla-brand)}
+.mlla-lock-notice.is-success{border-color:var(--mlla-success-soft);border-left-color:var(--mlla-success);background:#f7fdf8}
+.mlla-lock-notice.is-error{border-color:var(--mlla-danger-soft);border-left-color:var(--mlla-danger);background:#fff7f7}
+.mlla-license-message{margin:0 0 14px;font-size:14px;color:var(--mlla-ink)}
+.mlla-license-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.mlla-license-actions form{margin:0}
+.mlla-how-list li{margin:0 0 10px;line-height:1.5}

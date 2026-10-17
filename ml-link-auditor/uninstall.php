@@ -19,3 +19,7 @@ delete_transient('mlla_update_check');
 delete_transient('mlla_license_cache');
 wp_clear_scheduled_hook('mlla_check_for_update');
 wp_clear_scheduled_hook('mlla_daily_validate');
+
+// 1.4.0: licença pelo site tools — a licença local fica (reinstalar recupera); só a
+// renovação diária é desagendada.
+wp_clear_scheduled_hook('mllc_ml_link_auditor_refresh');
