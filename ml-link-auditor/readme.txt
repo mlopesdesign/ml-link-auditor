@@ -4,7 +4,7 @@ Tags: broken links, audit, ajax, quarantine, links, joomla migration
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.4.0
+Stable tag: 1.4.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -36,6 +36,9 @@ O ML Link Auditor varre o conteúdo publicado do site procurando links internos 
 3. Acesse o menu "ML Link Auditor" no admin e inicie a varredura.
 
 == Changelog ==
+
+= 1.4.1 =
+* Corrigido (crítico): com o plugin ativo sozinho (sem outro plugin ML que carregasse o cliente de licença antes), o site inteiro caía com erro fatal "Class ML_License_Client_V2 not found". O cliente de licença agora é carregado sempre. Nenhuma mudança de comportamento.
 
 = 1.4.0 =
 * Licenca pelo site tools.mlopesdesign.com.br (ML License Hub). O servidor antigo license.mlopesdesign.com.br nao e mais consultado (nem a validacao diaria antiga).
