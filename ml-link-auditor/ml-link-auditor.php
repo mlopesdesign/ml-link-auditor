@@ -3,7 +3,7 @@
  * Plugin Name: ML Link Auditor
  * Plugin URI: https://mlopesdesign.com.br
  * Description: Audita links internos e externos em posts e páginas, executa varredura AJAX em lote, sugere correções, salva cópias em quarentena, pode mover conteúdos para rascunho com licença pelo site tools.mlopesdesign.com.br (teste grátis de 30 dias).
- * Version: 1.4.0
+ * Version: 1.4.1
  * Author: Marcio Lopes
  * Author URI: https://mlopesdesign.com.br
  * License: GPL2+
@@ -19,7 +19,7 @@ if (!defined('ABSPATH')) {
 }
 
 if (!defined('MLLA_VERSION')) {
-    define('MLLA_VERSION', '1.4.0');
+    define('MLLA_VERSION', '1.4.1');
 }
 
 /* ============================================================
